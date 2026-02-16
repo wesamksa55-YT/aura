@@ -63,7 +63,7 @@ function saveData() {
 // ================================
 // ⚙️ SETTINGS
 // ================================
-const TICKET_CATEGORY_ID = "PUT_CATEGORY_ID_HERE";
+const TICKET_CATEGORY_ID = "1407559493587308586";
 
 
 // ================================
