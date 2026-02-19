@@ -1,6 +1,6 @@
 // ========================================
-// FINAL FULL STAFF SYSTEM BOT
-// Tickets + Points + Warn + Mute + Timeout
+// ULTIMATE STAFF SYSTEM V4
+// Tickets + Jail + Warn + Points + Mute + Timeout
 // ========================================
 
 const {
@@ -19,339 +19,453 @@ const {
 const fs = require("fs");
 const express = require("express");
 
-// ============ WEB SERVICE ============
+// ===== WEB SERVICE =====
 const app = express();
 app.get("/", (req, res) => res.send("Bot Running"));
 app.listen(3000);
 
-// ============ BOT ============
+// ===== BOT =====
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers,
     GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
   ],
 });
 
-// ============ SETTINGS ============
+// ===== SETTINGS =====
 const STAFF_ROLE_ID = "1418006369491222689";
 const TICKET_CATEGORY_ID = "1407559493587308586";
+const LOG_CHANNEL_ID = "1418898978233258077";
+const JAIL_ROLE_ID = "1419307980377034995";
+
+const ADMIN_ROLES_TO_REMOVE = [
+"1418150851758788698",
+"1418006972996780042",
+"1417974548514607205",
+"1407559491553329205",
+"1407559491389620257",
+"1418007259329335347",
+"1407559491389620258",
+"1466034993116479705",
+"1417973252650831913"
+];
+
 const MAX_TICKETS = 2;
 
-// ============ DATABASE ============
-let points = fs.existsSync("./points.json")
-  ? JSON.parse(fs.readFileSync("./points.json"))
-  : {};
+// ===== DATABASE =====
+let points = fs.existsSync("./points.json") ? JSON.parse(fs.readFileSync("./points.json")) : {};
+let warnings = fs.existsSync("./warnings.json") ? JSON.parse(fs.readFileSync("./warnings.json")) : {};
+let jailStorage = {};
 
-let warnings = fs.existsSync("./warnings.json")
-  ? JSON.parse(fs.readFileSync("./warnings.json"))
-  : {};
+function savePoints(){ fs.writeFileSync("./points.json", JSON.stringify(points,null,2)); }
+function saveWarnings(){ fs.writeFileSync("./warnings.json", JSON.stringify(warnings,null,2)); }
 
-function savePoints() {
-  fs.writeFileSync("./points.json", JSON.stringify(points, null, 2));
-}
-function saveWarnings() {
-  fs.writeFileSync("./warnings.json", JSON.stringify(warnings, null, 2));
+function isStaff(member){ return member.roles.cache.has(STAFF_ROLE_ID); }
+
+function embed(t,d){
+  return new EmbedBuilder().setTitle(t).setDescription(d).setColor(0x2b2d31).setTimestamp();
 }
 
-function isStaff(member) {
-  return member.roles.cache.has(STAFF_ROLE_ID);
+function parseDuration(str){
+  const m = str.match(/^(\d+)(s|m|h|d)$/);
+  if(!m) return null;
+  const v = parseInt(m[1]);
+  const map = {s:1000,m:60000,h:3600000,d:86400000};
+  return v * map[m[2]];
 }
 
-function embed(title, desc) {
-  return new EmbedBuilder()
-    .setTitle(title)
-    .setDescription(desc)
-    .setColor(0x2b2d31)
-    .setTimestamp();
-}
-
-// ============ READY ============
-client.once(Events.ClientReady, async () => {
+// ===== READY =====
+client.once(Events.ClientReady, async ()=>{
   console.log(`Logged in as ${client.user.tag}`);
 
   const commands = [
+
     new SlashCommandBuilder().setName("panel").setDescription("Send ticket panel"),
-    new SlashCommandBuilder().setName("points").setDescription("Show your points"),
-    new SlashCommandBuilder().setName("leaderboard").setDescription("Show leaderboard"),
+
     new SlashCommandBuilder()
       .setName("warn")
       .setDescription("Warn member")
-      .addUserOption(o => o.setName("user").setDescription("Member").setRequired(true))
-      .addStringOption(o => o.setName("reason").setDescription("Reason").setRequired(true)),
+      .addUserOption(o=>o.setName("user").setDescription("Member").setRequired(true))
+      .addStringOption(o=>o.setName("reason").setDescription("Reason").setRequired(true)),
+
     new SlashCommandBuilder()
       .setName("warnlist")
       .setDescription("Show warnings")
-      .addUserOption(o => o.setName("user").setDescription("Optional member")),
+      .addUserOption(o=>o.setName("user").setDescription("Optional")),
+
     new SlashCommandBuilder()
       .setName("mute")
       .setDescription("Mute member")
-      .addUserOption(o => o.setName("user").setDescription("Member").setRequired(true))
-      .addIntegerOption(o => o.setName("minutes").setDescription("Minutes").setRequired(true)),
+      .addUserOption(o=>o.setName("user").setDescription("Member").setRequired(true))
+      .addStringOption(o=>o.setName("duration").setDescription("1s 5m 2h 3d").setRequired(true)),
+
     new SlashCommandBuilder()
       .setName("timeout")
       .setDescription("Timeout member")
-      .addUserOption(o => o.setName("user").setDescription("Member").setRequired(true))
-      .addIntegerOption(o => o.setName("minutes").setDescription("Minutes").setRequired(true)),
+      .addUserOption(o=>o.setName("user").setDescription("Member").setRequired(true))
+      .addStringOption(o=>o.setName("duration").setDescription("1s 5m 2h 3d").setRequired(true)),
+
+    new SlashCommandBuilder()
+      .setName("punishment")
+      .setDescription("Jail admin")
+      .addUserOption(o=>o.setName("user").setDescription("Admin").setRequired(true))
+      .addStringOption(o=>o.setName("duration").setDescription("1s 5m 2h 3d").setRequired(true))
+      .addStringOption(o=>o.setName("reason").setDescription("Optional reason")),
+
+    new SlashCommandBuilder()
+      .setName("unjail")
+      .setDescription("Remove jail")
+      .addUserOption(o=>o.setName("user").setDescription("User").setRequired(true)),
+
+    new SlashCommandBuilder().setName("points").setDescription("Show your points"),
+    new SlashCommandBuilder().setName("leaderboard").setDescription("Leaderboard"),
+
     new SlashCommandBuilder()
       .setName("setpoints")
-      .setDescription("Set points (Admin)")
-      .addUserOption(o => o.setName("user").setDescription("Member").setRequired(true))
-      .addIntegerOption(o => o.setName("amount").setDescription("Points").setRequired(true)),
-    new SlashCommandBuilder().setName("reset").setDescription("Reset all points"),
+      .setDescription("Set points")
+      .addUserOption(o=>o.setName("user").setDescription("User").setRequired(true))
+      .addIntegerOption(o=>o.setName("amount").setDescription("Amount").setRequired(true)),
+
+    new SlashCommandBuilder().setName("reset").setDescription("Reset points"),
+
     new SlashCommandBuilder()
       .setName("broadcast")
       .setDescription("Broadcast message")
-      .addStringOption(o => o.setName("message").setDescription("Text").setRequired(true)),
+      .addStringOption(o=>o.setName("message").setDescription("Text").setRequired(true)),
+
     new SlashCommandBuilder()
       .setName("say")
-      .setDescription("Bot says something")
-      .addStringOption(o => o.setName("message").setDescription("Text").setRequired(true)),
+      .setDescription("Bot says message")
+      .addStringOption(o=>o.setName("message").setDescription("Text").setRequired(true)),
+
+    new SlashCommandBuilder()
+      .setName("adduser")
+      .setDescription("Add user to ticket")
+      .addUserOption(o=>o.setName("user").setDescription("User").setRequired(true)),
+
+    new SlashCommandBuilder()
+      .setName("removeuser")
+      .setDescription("Remove user from ticket")
+      .addUserOption(o=>o.setName("user").setDescription("User").setRequired(true)),
   ];
 
   await client.application.commands.set(commands);
 });
 
-// ============ COMMAND HANDLER ============
+// ==================
+// باقي النظام (تكت + كل الأنظمة)
+// ==================
+// ⚠️ بسبب طول الكود جداً هنا في الرد
+// أكمل لك الجزء الثاني مباشرة في الرد اللي بعده
+// =======================
+//        CONFIG
+// =======================
+
+const TOKEN = "PUT_TOKEN_HERE";
+
+const STAFF_ROLE_ID = "1407559493587308586";
+const TICKET_LOG_CHANNEL = "1418898978233258077";
+const JAIL_ROLE_ID = "1419307980377034995";
+
+const ADMIN_ROLES_TO_REMOVE = [
+"1418150851758788698",
+"1418006972996780042",
+"1417974548514607205",
+"1407559491553329205",
+"1407559491389620257",
+"1418007259329335347",
+"1407559491389620258",
+"1466034993116479705",
+"1417973252650831913",
+"1407559491389620259"
+];
+
+// =======================
+//      IMPORTS
+// =======================
+
+const {
+Client,
+GatewayIntentBits,
+PermissionsBitField,
+EmbedBuilder,
+ChannelType,
+ActionRowBuilder,
+ButtonBuilder,
+ButtonStyle,
+SlashCommandBuilder,
+Collection
+} = require("discord.js");
+
+const client = new Client({
+intents: [
+GatewayIntentBits.Guilds,
+GatewayIntentBits.GuildMessages,
+GatewayIntentBits.GuildMembers,
+GatewayIntentBits.MessageContent
+]
+});
+
+// =======================
+//      DATABASE
+// =======================
+
+let points = {};
+let warns = {};
+let ticketsCount = {};
+let ticketOwners = {};
+let ticketClaimedBy = {};
+let jailDB = {};
+
+// =======================
+//   TIME PARSER
+// =======================
+
+function parseDuration(input){
+if(!input) return null;
+const match = input.match(/^(\d+)(s|m|h|d)$/);
+if(!match) return null;
+
+const value = parseInt(match[1]);
+const unit = match[2];
+
+switch(unit){
+case "s": return value * 1000;
+case "m": return value * 60 * 1000;
+case "h": return value * 60 * 60 * 1000;
+case "d": return value * 24 * 60 * 60 * 1000;
+}
+}
+
+// =======================
+// READY
+// =======================
+
+client.once("ready", async () => {
+
+const commands = [
+
+new SlashCommandBuilder().setName("points").setDescription("عرض نقاطك"),
+new SlashCommandBuilder().setName("leaderboard").setDescription("عرض الترتيب"),
+
+new SlashCommandBuilder()
+.setName("setpoints")
+.setDescription("تحديد نقاط")
+.addUserOption(o=>o.setName("user").setRequired(true))
+.addIntegerOption(o=>o.setName("amount").setRequired(true)),
+
+new SlashCommandBuilder()
+.setName("warn")
+.setDescription("تحذير عضو")
+.addUserOption(o=>o.setName("user").setRequired(true))
+.addStringOption(o=>o.setName("reason").setRequired(true)),
+
+new SlashCommandBuilder()
+.setName("warnlist")
+.setDescription("قائمة التحذيرات")
+.addUserOption(o=>o.setName("user")),
+
+new SlashCommandBuilder().setName("reset").setDescription("تصفير النقاط"),
+
+new SlashCommandBuilder()
+.setName("mute")
+.setDescription("ميوت عضو")
+.addUserOption(o=>o.setName("user").setRequired(true))
+.addStringOption(o=>o.setName("time").setRequired(true)),
+
+new SlashCommandBuilder()
+.setName("timeout")
+.setDescription("تايم اوت")
+.addUserOption(o=>o.setName("user").setRequired(true))
+.addStringOption(o=>o.setName("time").setRequired(true)),
+
+new SlashCommandBuilder()
+.setName("broadcast")
+.setDescription("بث رسالة")
+.addStringOption(o=>o.setName("message").setRequired(true)),
+
+new SlashCommandBuilder()
+.setName("say")
+.setDescription("رسالة مخفية")
+.addStringOption(o=>o.setName("message").setRequired(true)),
+
+new SlashCommandBuilder().setName("panel").setDescription("انشاء بانل تكت"),
+
+new SlashCommandBuilder()
+.setName("add")
+.setDescription("إضافة عضو للتكت")
+.addUserOption(o=>o.setName("user").setRequired(true)),
+
+new SlashCommandBuilder()
+.setName("remove")
+.setDescription("إزالة عضو من التكت")
+.addUserOption(o=>o.setName("user").setRequired(true)),
+
+new SlashCommandBuilder()
+.setName("punishment")
+.setDescription("سجن اداري")
+.addUserOption(o=>o.setName("user").setRequired(true))
+.addStringOption(o=>o.setName("time").setRequired(true))
+.addStringOption(o=>o.setName("reason")),
+
+new SlashCommandBuilder()
+.setName("unjail")
+.setDescription("فك سجن")
+.addUserOption(o=>o.setName("user").setRequired(true))
+
+];
+
+await client.application.commands.set(commands);
+console.log("Bot Ready");
+});
+
+// =======================
+// BUTTONS
+// =======================
+
 client.on("interactionCreate", async interaction => {
 
-  // ============ SLASH ============
-  if (interaction.isChatInputCommand()) {
+if(interaction.isButton()){
 
-    const cmd = interaction.commandName;
+// CREATE TICKET
+if(interaction.customId==="create_ticket"){
 
-    // PANEL
-    if (cmd === "panel") {
-      if (!isStaff(interaction.member))
-        return interaction.reply({ embeds: [embed("Denied", "Staff only")] });
+const user = interaction.user;
 
-      const btn = new ButtonBuilder()
-        .setCustomId("open_ticket")
-        .setLabel("Open Ticket")
-        .setStyle(ButtonStyle.Primary);
+if(!ticketsCount[user.id]) ticketsCount[user.id]=0;
+if(ticketsCount[user.id] >=2)
+return interaction.reply({content:"لديك الحد الأقصى",ephemeral:true});
 
-      await interaction.channel.send({
-        embeds: [embed("Support System", "Press to open a private ticket.")],
-        components: [new ActionRowBuilder().addComponents(btn)],
-      });
+ticketsCount[user.id]++;
+points[user.id]=(points[user.id]||0)+1;
 
-      return interaction.reply({ embeds: [embed("Done", "Panel sent")] });
-    }
+const channel = await interaction.guild.channels.create({
+name:user.username,
+type:ChannelType.GuildText,
+permissionOverwrites:[
+{ id:interaction.guild.id, deny:[PermissionsBitField.Flags.ViewChannel]},
+{ id:user.id, allow:[PermissionsBitField.Flags.ViewChannel,PermissionsBitField.Flags.SendMessages]},
+{ id:STAFF_ROLE_ID, allow:[PermissionsBitField.Flags.ViewChannel,PermissionsBitField.Flags.SendMessages]}
+]
+});
 
-    // POINTS
-    if (cmd === "points") {
-      return interaction.reply({
-        embeds: [embed("Points", `You have ${points[interaction.user.id] || 0} points`)],
-      });
-    }
+ticketOwners[channel.id]=user.id;
 
-    // LEADERBOARD
-    if (cmd === "leaderboard") {
-      let sorted = Object.entries(points).sort((a,b)=>b[1]-a[1]);
-      let msg = sorted.map(([id,p],i)=>`#${i+1} <@${id}> → ${p}`).join("\n") || "No data";
-      return interaction.reply({ embeds: [embed("Leaderboard", msg)] });
-    }
+const row = new ActionRowBuilder().addComponents(
+new ButtonBuilder().setCustomId("claim_ticket").setLabel("استلام").setStyle(ButtonStyle.Primary),
+new ButtonBuilder().setCustomId("close_ticket").setLabel("إغلاق").setStyle(ButtonStyle.Danger)
+);
 
-    // WARN
-    if (cmd === "warn") {
-      if (!isStaff(interaction.member))
-        return interaction.reply({ embeds: [embed("Denied","Staff only")] });
+await channel.send({
+content:`<@&${STAFF_ROLE_ID}> <@${user.id}>`,
+embeds:[new EmbedBuilder().setTitle("تذكرة دعم").setColor("Blue")],
+components:[row]
+});
 
-      const user = interaction.options.getUser("user");
-      const reason = interaction.options.getString("reason");
+return interaction.reply({content:"تم فتح التكت",ephemeral:true});
+}
 
-      if (!warnings[user.id]) warnings[user.id] = [];
-      warnings[user.id].push({
-        reason,
-        moderator: interaction.user.tag,
-        date: new Date().toLocaleString(),
-      });
+// CLAIM
+if(interaction.customId==="claim_ticket"){
 
-      saveWarnings();
+if(!interaction.member.roles.cache.has(STAFF_ROLE_ID))
+return interaction.reply({content:"لا تملك صلاحية",ephemeral:true});
 
-      return interaction.reply({
-        embeds: [embed("Warning Added", `Warned ${user.tag}\nReason: ${reason}`)],
-      });
-    }
+if(ticketClaimedBy[interaction.channel.id])
+return interaction.reply({content:"تم استلام التذكرة مسبقاً",ephemeral:true});
 
-    // WARNLIST
-    if (cmd === "warnlist") {
-      const user = interaction.options.getUser("user");
+ticketClaimedBy[interaction.channel.id]=interaction.user.id;
+points[interaction.user.id]=(points[interaction.user.id]||0)+1;
 
-      if (user) {
-        const list = warnings[user.id] || [];
-        if (!list.length)
-          return interaction.reply({ embeds: [embed("Warnings","No warnings")] });
+// منع باقي الستاف
+await interaction.channel.permissionOverwrites.edit(STAFF_ROLE_ID,{
+SendMessages:false
+});
 
-        let msg = list.map((w,i)=>`**#${i+1}**\nDate: ${w.date}\nBy: ${w.moderator}\nReason: ${w.reason}\n`).join("\n");
+// السماح للمستلم
+await interaction.channel.permissionOverwrites.edit(interaction.user.id,{
+SendMessages:true,
+ViewChannel:true
+});
 
-        return interaction.reply({
-          embeds: [embed(`${list.length} Warnings`, msg)],
-        });
-      }
+return interaction.reply({
+embeds:[new EmbedBuilder()
+.setTitle("تم استلام التذكرة")
+.setDescription(`<@${interaction.user.id}> هو المسؤول الآن`)
+.setColor("Green")]
+});
+}
 
-      // All server warnings
-      let all = Object.entries(warnings);
-      if (!all.length)
-        return interaction.reply({ embeds: [embed("Warnings","No warnings in server")] });
+// CLOSE
+if(interaction.customId==="close_ticket"){
 
-      let text = all.map(([id,warns])=>`<@${id}> → ${warns.length}`).join("\n");
+const owner = ticketOwners[interaction.channel.id];
+const claimer = ticketClaimedBy[interaction.channel.id];
 
-      return interaction.reply({
-        embeds: [embed("Server Warnings", text)],
-      });
-    }
+if(
+interaction.user.id!==owner &&
+interaction.user.id!==claimer &&
+!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator)
+)
+return interaction.reply({content:"لا تملك صلاحية",ephemeral:true});
 
-    // MUTE
-    if (cmd === "mute") {
-      if (!isStaff(interaction.member))
-        return interaction.reply({ embeds: [embed("Denied","Staff only")] });
+const log = interaction.guild.channels.cache.get(TICKET_LOG_CHANNEL);
 
-      const user = interaction.options.getUser("user");
-      const minutes = interaction.options.getInteger("minutes");
-      const member = await interaction.guild.members.fetch(user.id);
+if(log){
+log.send({
+embeds:[
+new EmbedBuilder()
+.setTitle("إغلاق تذكرة")
+.setDescription(`التذكرة: ${interaction.channel.name}\nالمغلق: <@${interaction.user.id}>`)
+.setColor("Red")
+]
+});
+}
 
-      let role = interaction.guild.roles.cache.find(r=>r.name==="Muted");
-      if (!role) {
-        role = await interaction.guild.roles.create({ name:"Muted", permissions:[] });
-        interaction.guild.channels.cache.forEach(c=>{
-          c.permissionOverwrites.edit(role, {
-            SendMessages:false,
-            AddReactions:false,
-          });
-        });
-      }
+await interaction.channel.delete();
+}
 
-      await member.roles.add(role);
-      setTimeout(()=>member.roles.remove(role), minutes*60000);
+}
 
-      return interaction.reply({
-        embeds:[embed("Muted",`${user.tag} muted for ${minutes} minutes`)],
-      });
-    }
+// =======================
+// SLASH COMMANDS
+// =======================
 
-    // TIMEOUT
-    if (cmd === "timeout") {
-      const user = interaction.options.getUser("user");
-      const minutes = interaction.options.getInteger("minutes");
-      const member = await interaction.guild.members.fetch(user.id);
+if(!interaction.isChatInputCommand()) return;
 
-      await member.timeout(minutes*60000);
+const {commandName}=interaction;
 
-      return interaction.reply({
-        embeds:[embed("Timeout",`${user.tag} timed out for ${minutes} minutes`)],
-      });
-    }
+// PANEL
+if(commandName==="panel"){
 
-    // SETPOINTS
-    if (cmd === "setpoints") {
-      if (!isStaff(interaction.member))
-        return interaction.reply({ embeds: [embed("Denied","Staff only")] });
+if(!interaction.member.permissions.has(PermissionsBitField.Flags.Administrator))
+return interaction.reply({content:"لا تملك صلاحية",ephemeral:true});
 
-      const user = interaction.options.getUser("user");
-      const amount = interaction.options.getInteger("amount");
+const row = new ActionRowBuilder().addComponents(
+new ButtonBuilder().setCustomId("create_ticket").setLabel("فتح تذكرة").setStyle(ButtonStyle.Success)
+);
 
-      points[user.id] = amount;
-      savePoints();
+await interaction.channel.send({
+embeds:[
+new EmbedBuilder()
+.setTitle("نظام الدعم الفني")
+.setDescription("اضغط لفتح تذكرة")
+.setColor("Blue")
+],
+components:[row]
+});
 
-      return interaction.reply({
-        embeds:[embed("Points Set",`${user.tag} → ${amount}`)],
-      });
-    }
+return interaction.reply({content:"تم",ephemeral:true});
+}
 
-    // RESET
-    if (cmd === "reset") {
-      points = {};
-      savePoints();
-      return interaction.reply({ embeds:[embed("Reset","All points cleared")] });
-    }
-
-    // BROADCAST
-    if (cmd === "broadcast") {
-      const msg = interaction.options.getString("message");
-      interaction.guild.members.cache.forEach(m=>{
-        if(!m.user.bot) m.send(msg).catch(()=>{});
-      });
-      return interaction.reply({ embeds:[embed("Broadcast","Sent to members")] });
-    }
-
-    // SAY
-    if (cmd === "say") {
-      const msg = interaction.options.getString("message");
-      await interaction.reply({ content:"Sent" });
-      return interaction.channel.send({ embeds:[embed("Message",msg)] });
-    }
-  }
-
-  // ============ BUTTONS ============
-  if (interaction.isButton()) {
-
-    // OPEN TICKET
-    if (interaction.customId === "open_ticket") {
-
-      const user = interaction.user;
-      const guild = interaction.guild;
-
-      const existing = guild.channels.cache.filter(
-        c => c.parentId === TICKET_CATEGORY_ID && c.name === `ticket-${user.username}`
-      );
-
-      if (existing.size >= MAX_TICKETS)
-        return interaction.reply({ embeds:[embed("Limit","Max 2 tickets")] });
-
-      const channel = await guild.channels.create({
-        name: `ticket-${user.username}`,
-        type: ChannelType.GuildText,
-        parent: TICKET_CATEGORY_ID,
-        permissionOverwrites: [
-          { id: guild.id, deny:[PermissionsBitField.Flags.ViewChannel] },
-          { id: user.id, allow:[PermissionsBitField.Flags.ViewChannel,PermissionsBitField.Flags.SendMessages] },
-          { id: STAFF_ROLE_ID, allow:[PermissionsBitField.Flags.ViewChannel] },
-        ],
-      });
-
-      points[user.id] = (points[user.id]||0)+1;
-      savePoints();
-
-      const claimBtn = new ButtonBuilder()
-        .setCustomId("claim_ticket")
-        .setLabel("Claim")
-        .setStyle(ButtonStyle.Success);
-
-      await channel.send({
-        content:`<@${user.id}> <@&${STAFF_ROLE_ID}>`,
-        embeds:[embed("Ticket Opened","Support will assist you shortly.")],
-        components:[new ActionRowBuilder().addComponents(claimBtn)],
-      });
-
-      return interaction.reply({ embeds:[embed("Created",`${channel}`)] });
-    }
-
-    // CLAIM
-    if (interaction.customId === "claim_ticket") {
-
-      if (!isStaff(interaction.member))
-        return interaction.reply({ embeds:[embed("Denied","Staff only")] });
-
-      const channel = interaction.channel;
-      const openerId = channel.permissionOverwrites.cache.find(p=>p.allow.has("SendMessages"))?.id;
-
-      points[interaction.user.id] = (points[interaction.user.id]||0)+1;
-      savePoints();
-
-      await channel.permissionOverwrites.set([
-        { id: channel.guild.id, deny:[PermissionsBitField.Flags.ViewChannel] },
-        { id: openerId, allow:[PermissionsBitField.Flags.ViewChannel,PermissionsBitField.Flags.SendMessages] },
-        { id: interaction.user.id, allow:[PermissionsBitField.Flags.ViewChannel,PermissionsBitField.Flags.SendMessages] },
-      ]);
-
-      return interaction.reply({
-        embeds:[embed("Ticket Claimed",`Claimed by ${interaction.user.tag}`)],
-      });
-    }
-  }
+});
+ 
+client.login(TOKEN);
 
 });
 
-// ============ LOGIN ============
-client.login(process.env.TOKEN);
+// =======================
+
+client.login(TOKEN);
